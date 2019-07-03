@@ -1,11 +1,8 @@
-extern "C" {
-    #[link_name = "__dpdk_rdtsc"]
-    fn dpdk_rdtsc() -> u64;
-}
+use std::arch::x86_64::_rdtsc;
 
 #[inline]
 pub fn get_tsc_cycles() -> u64 {
-    unsafe { dpdk_rdtsc() }
+    unsafe { _rdtsc() as u64 }
 }
 
 #[inline]
