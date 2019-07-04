@@ -1,5 +1,5 @@
 [package]
-name = "dpdk-rs"
+name = "dpdk"
 version = "0.1.0"
 authors = ["condy <condy0919@gmail.com>"]
 edition = "2018"
