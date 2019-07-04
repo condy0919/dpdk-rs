@@ -26,7 +26,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_tsc_cycles() {
+    fn tsc_cycles() {
         let t1 = get_tsc_cycles();
         let t2 = get_tsc_cycles();
         assert!(t1 < t2);
