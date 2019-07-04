@@ -21,6 +21,7 @@ pub fn get_timer_cycles() -> u64 {
 
 // TODO rte delay us callback register
 
+#[cfg(test)]
 mod tests {
     use super::*;
 
