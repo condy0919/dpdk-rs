@@ -50,7 +50,7 @@
 //!                 break;
 //!             }
 //!             Err(e) => {
-//!                 warn!("Unable to locate a razor: {}, retrying", e);
+//!                 warn!(logger, "Unable to locate a razor: {}, retrying", e);
 //!             }
 //!         }
 //!     }
@@ -375,7 +375,7 @@ impl<'a> Logger<'a> {
             panic!("can't format year 9999");
         }
 
-        let (year, mon, day, hr, min, sec) = __private::localtime(secs_since_epoch);
+        let (year, mon, day, hr, min, sec) = private::localtime(secs_since_epoch);
 
         if self.last_ts != secs_since_epoch {
             self.last_ts = secs_since_epoch;
@@ -410,7 +410,7 @@ impl<'a> Logger<'a> {
         self.buffer[24] = b'[';
 
         let len = LOG_LEVEL_NAMES[level as usize].len();
-        self.buffer[25..(25 + len)].copy_from_slice(LOG_LEVEL_NAMES[level as usize].as_bytes());
+        self.buffer[25..][..len].copy_from_slice(LOG_LEVEL_NAMES[level as usize].as_bytes());
 
         let mut idx = 25 + len;
 
@@ -420,7 +420,7 @@ impl<'a> Logger<'a> {
         self.buffer[idx] = b' ';
         idx += 1;
 
-        self.buffer[idx..(idx + file.len())].copy_from_slice(file.as_bytes());
+        self.buffer[idx..][..file.len()].copy_from_slice(file.as_bytes());
         idx += file.len();
 
         self.buffer[idx] = b':';
@@ -563,8 +563,7 @@ impl FromStr for Level {
 }
 
 
-#[doc(hidden)]
-mod __private {
+mod private {
     pub fn localtime(secs: u64) -> (u32, u32, u32, u32, u32, u32) {
         // Copy from https://github.com/tailhook/humantime
         /*
