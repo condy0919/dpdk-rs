@@ -1,7 +1,13 @@
 [package]
-name = "dpdk-rs"
+name = "dpdk"
 version = "0.1.0"
 authors = ["condy <condy0919@gmail.com>"]
 edition = "2018"
+license = "MIT"
+build = "build.rs"
 
 [dependencies]
+libc = "0.2"
+
+[build-dependencies]
+cc = "1.0"
