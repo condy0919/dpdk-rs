@@ -33,6 +33,7 @@
 //!
 
 use std::sync::atomic::{spin_loop_hint, AtomicBool, Ordering};
+use std::cell::UnsafeCell;
 use super::gettid;
 
 /// The spinlock type
@@ -41,14 +42,17 @@ pub struct SpinLock {
     ///
     /// false indicates unlocked
     /// true indicates locked
-    locked: AtomicBool,
+    locked: UnsafeCell<AtomicBool>,
 }
+
+unsafe impl Sync for SpinLock {}
+unsafe impl Send for SpinLock {}
 
 impl Default for SpinLock {
     /// Construct the spinlock with unlocked state
     fn default() -> Self {
         SpinLock {
-            locked: AtomicBool::new(false),
+            locked: UnsafeCell::new(AtomicBool::new(false)),
         }
     }
 }
@@ -56,40 +60,46 @@ impl Default for SpinLock {
 impl Drop for SpinLock {
     fn drop(&mut self) {
         if self.is_locked() {
-            panic!("spinlock unlocked");
+            panic!("spinlock still locked");
         }
     }
 }
 
 impl SpinLock {
     /// Take the spinlock
-    pub fn lock(&mut self) {
+    pub fn lock(&self) {
         while self
-            .locked
+            .get_lock_mut()
             .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
             .is_err()
         {
-            while self.locked.load(Ordering::Relaxed) {
+            while self.get_lock_mut().load(Ordering::Relaxed) {
                 spin_loop_hint();
             }
         }
     }
 
     /// Release the spinlock
-    pub fn unlock(&mut self) {
-        self.locked.store(false, Ordering::Release);
+    pub fn unlock(&self) {
+        self.get_lock_mut().store(false, Ordering::Release);
     }
 
     /// Try to take the spinlock
-    pub fn trylock(&mut self) -> bool {
-        self.locked
+    pub fn trylock(&self) -> bool {
+        self.get_lock_mut()
             .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
             .is_ok()
     }
 
     /// Test if the lock is taked
     pub fn is_locked(&self) -> bool {
-        self.locked.load(Ordering::Acquire)
+        self.get_lock_mut().load(Ordering::Acquire)
+    }
+
+    fn get_lock_mut(&self) -> &mut AtomicBool {
+        unsafe {
+            &mut *self.locked.get()
+        }
     }
 }
 
@@ -99,57 +109,72 @@ pub struct RecursiveSpinLock {
     /// The actual spinlock
     lk: SpinLock,
     /// The thread id, -1 for unused
-    tid: i32,
+    tid: UnsafeCell<i32>,
     /// The count of times this lock has been called
-    count: usize,
+    count: UnsafeCell<usize>,
 }
+
+unsafe impl Sync for RecursiveSpinLock {}
+unsafe impl Send for RecursiveSpinLock {}
 
 impl Default for RecursiveSpinLock {
     /// Construct the recursive spinlock with unlocked state
     fn default() -> Self {
         RecursiveSpinLock {
             lk: SpinLock::default(),
-            tid: -1,
-            count: 0,
+            tid: UnsafeCell::new(-1),
+            count: UnsafeCell::new(0),
         }
     }
 }
 
 impl RecursiveSpinLock {
     /// Take the recursive spinlock
-    pub fn lock(&mut self) {
+    pub fn lock(&self) {
         let id = gettid();
 
-        if self.tid != id {
+        if *self.get_tid_mut() != id {
             self.lk.lock();
-            self.tid = id;
+            *self.get_tid_mut() = id;
         }
-        self.count += 1;
+        *self.get_count_mut() += 1;
     }
 
     /// Release recursive spinlock
-    pub fn unlock(&mut self) {
-        self.count -= 1;
+    pub fn unlock(&self) {
+        *self.get_count_mut() -= 1;
 
-        if self.count == 0 {
-            self.tid = -1;
+        if *self.get_count_mut() == 0 {
+            *self.get_tid_mut() = -1;
             self.lk.unlock();
         }
     }
 
     /// Try to take the recursive spinlock
-    pub fn trylock(&mut self) -> bool {
+    pub fn trylock(&self) -> bool {
         let id = gettid();
 
-        if self.tid != id {
+        if *self.get_tid_mut() != id {
             if !self.lk.trylock() {
                 return false;
             }
-            self.tid = id;
+            *self.get_tid_mut() = id;
         }
-        self.count += 1;
+        *self.get_count_mut() += 1;
 
         true
+    }
+
+    fn get_tid_mut(&self) -> &mut i32 {
+        unsafe {
+            &mut *self.tid.get()
+        }
+    }
+
+    fn get_count_mut(&self) -> &mut usize {
+        unsafe {
+            &mut *self.count.get()
+        }
     }
 }
 
@@ -160,14 +185,14 @@ mod tests {
     #[test]
     #[should_panic]
     fn spinlock_drop_when_locked() {
-        let mut lk = SpinLock::default();
+        let lk = SpinLock::default();
 
         lk.lock();
     }
 
     #[test]
     fn spinlock_lock_unlock() {
-        let mut lk = SpinLock::default();
+        let lk = SpinLock::default();
         assert!(!lk.is_locked());
 
         lk.lock();
@@ -179,7 +204,7 @@ mod tests {
 
     #[test]
     fn spinlock_trylock() {
-        let mut lk = SpinLock::default();
+        let lk = SpinLock::default();
         assert!(!lk.is_locked());
 
         assert!(lk.trylock());
@@ -194,14 +219,14 @@ mod tests {
     #[test]
     #[should_panic]
     fn recursive_spinlock_drop_when_locked() {
-        let mut lk = RecursiveSpinLock::default();
+        let lk = RecursiveSpinLock::default();
 
         lk.lock();
     }
 
     #[test]
     fn recursive_spinlock_lock_unlock() {
-        let mut lk = RecursiveSpinLock::default();
+        let lk = RecursiveSpinLock::default();
 
         lk.lock();
         lk.unlock();

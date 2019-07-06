@@ -5,6 +5,7 @@ pub mod cycles;
 pub mod lcore;
 pub mod log;
 pub mod spinlock;
+pub mod rwlock;
 
 thread_local! {
     static CURRENT_TID: RefCell<i32> = RefCell::new(-1);
