@@ -28,21 +28,27 @@
 //! ```
 //!
 //! NOTE:
-//! [TSX](https://gcc.gnu.org/onlinedocs/gcc-4.8.2/gcc/X86-transactional-memory-intrinsics.html) supports will be available whem `asm!` is stable.
+//! [TSX](https://gcc.gnu.org/onlinedocs/gcc-4.8.2/gcc/X86-transactional-memory-intrinsics.html)
 //!
 //!
 
-use std::sync::atomic::{spin_loop_hint, AtomicBool, Ordering};
-use std::cell::UnsafeCell;
 use super::gettid;
+use std::cell::UnsafeCell;
+use std::os::raw::c_int;
+use std::sync::atomic::{spin_loop_hint, AtomicI32, Ordering};
+use std::thread::panicking;
+
+extern "C" {
+    fn rte_try_tm(lock: *mut i32) -> c_int;
+    fn rte_xend();
+}
 
 /// The spinlock type
 pub struct SpinLock {
     /// The lock state
-    ///
-    /// false indicates unlocked
-    /// true indicates locked
-    locked: UnsafeCell<AtomicBool>,
+    // 0 indicates unlocked; 1 indicates locked.
+    // locked must be of 32bit size for RTM
+    locked: UnsafeCell<AtomicI32>,
 }
 
 unsafe impl Sync for SpinLock {}
@@ -52,14 +58,14 @@ impl Default for SpinLock {
     /// Construct the spinlock with unlocked state
     fn default() -> Self {
         SpinLock {
-            locked: UnsafeCell::new(AtomicBool::new(false)),
+            locked: UnsafeCell::new(AtomicI32::new(0)),
         }
     }
 }
 
 impl Drop for SpinLock {
     fn drop(&mut self) {
-        if self.is_locked() {
+        if self.is_locked() && !panicking() {
             panic!("spinlock still locked");
         }
     }
@@ -68,41 +74,55 @@ impl Drop for SpinLock {
 impl SpinLock {
     /// Take the spinlock
     pub fn lock(&self) {
-        while self
-            .get_lock_mut()
-            .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
-            .is_err()
-        {
-            while self.get_lock_mut().load(Ordering::Relaxed) {
-                spin_loop_hint();
+        unsafe {
+            if cfg!(feature = "tsx") {
+                if rte_try_tm(self.locked.get() as *mut i32) == 1 {
+                    return;
+                }
+            }
+
+            while (*self.locked.get())
+                .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
+                .is_err()
+            {
+                while (*self.locked.get()).load(Ordering::Relaxed) == 1 {
+                    spin_loop_hint();
+                }
             }
         }
     }
 
     /// Release the spinlock
     pub fn unlock(&self) {
-        self.get_lock_mut().store(false, Ordering::Release);
+        unsafe {
+            if self.is_locked() {
+                (*self.locked.get()).store(0, Ordering::Release);
+            } else {
+                rte_xend();
+            }
+        }
     }
 
     /// Try to take the spinlock
     pub fn trylock(&self) -> bool {
-        self.get_lock_mut()
-            .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
-            .is_ok()
+        unsafe {
+            if cfg!(feature = "tsx") {
+                if rte_try_tm(self.locked.get() as *mut i32) == 1 {
+                    return true;
+                }
+            }
+
+            (*self.locked.get())
+                .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
+                .is_ok()
+        }
     }
 
     /// Test if the lock is taked
     pub fn is_locked(&self) -> bool {
-        self.get_lock_mut().load(Ordering::Acquire)
-    }
-
-    fn get_lock_mut(&self) -> &mut AtomicBool {
-        unsafe {
-            &mut *self.locked.get()
-        }
+        unsafe { (*self.locked.get()).load(Ordering::Acquire) == 1 }
     }
 }
-
 
 /// The recursive spinlock type
 pub struct RecursiveSpinLock {
@@ -133,20 +153,35 @@ impl RecursiveSpinLock {
     pub fn lock(&self) {
         let id = gettid();
 
-        if *self.get_tid_mut() != id {
-            self.lk.lock();
-            *self.get_tid_mut() = id;
+        unsafe {
+            if cfg!(feature = "tsx") {
+                if rte_try_tm(&self.lk as *const _ as *mut i32) == 1 {
+                    return;
+                }
+            }
+
+            if *self.tid.get() != id {
+                self.lk.lock();
+                *self.tid.get() = id;
+            }
+
+            *self.count.get() += 1;
         }
-        *self.get_count_mut() += 1;
     }
 
     /// Release recursive spinlock
     pub fn unlock(&self) {
-        *self.get_count_mut() -= 1;
+        unsafe {
+            if self.lk.is_locked() {
+                *self.count.get() -= 1;
 
-        if *self.get_count_mut() == 0 {
-            *self.get_tid_mut() = -1;
-            self.lk.unlock();
+                if *self.count.get() == 0 {
+                    *self.tid.get() = -1;
+                    self.lk.unlock();
+                }
+            } else {
+                rte_xend();
+            }
         }
     }
 
@@ -154,27 +189,23 @@ impl RecursiveSpinLock {
     pub fn trylock(&self) -> bool {
         let id = gettid();
 
-        if *self.get_tid_mut() != id {
-            if !self.lk.trylock() {
-                return false;
+        unsafe {
+            if cfg!(feature = "tsx") {
+                if rte_try_tm(&self.lk as *const _ as *mut i32) == 1 {
+                    return true;
+                }
             }
-            *self.get_tid_mut() = id;
+
+            if *self.tid.get() != id {
+                if !self.lk.trylock() {
+                    return false;
+                }
+                *self.tid.get() = id;
+            }
+            *self.count.get() += 1;
         }
-        *self.get_count_mut() += 1;
 
         true
-    }
-
-    fn get_tid_mut(&self) -> &mut i32 {
-        unsafe {
-            &mut *self.tid.get()
-        }
-    }
-
-    fn get_count_mut(&self) -> &mut usize {
-        unsafe {
-            &mut *self.count.get()
-        }
     }
 }
 
