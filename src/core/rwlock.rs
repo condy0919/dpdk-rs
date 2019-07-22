@@ -169,11 +169,9 @@ mod tests {
 
             threads.push(thread::spawn(move || {
                 global_lk.write_lock();
-                println!("global write lock taken on thread {}", i);
                 global_lk.write_unlock();
 
                 local_lk.write_lock();
-                println!("hello from thread {}", i);
                 local_lk.write_unlock();
             }));
         }
