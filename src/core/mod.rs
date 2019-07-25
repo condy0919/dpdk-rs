@@ -88,5 +88,5 @@ pub fn write_r(fd: RawFd, buf: &[u8]) -> io::Result<usize> {
 #[inline]
 pub fn close(fd: RawFd) -> io::Result<()> {
     let result = unsafe { libc::close(fd) };
-    cvt(result).map(|_| ())
+    cvt(result).map(drop)
 }

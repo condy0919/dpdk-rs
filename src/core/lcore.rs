@@ -44,7 +44,7 @@
 //!
 //! lcore::Builder::new()
 //!     .name("lcore255".into())
-//!     .affinity(vec![1])
+//!     .affinity(&[1])
 //!     .spawn::<()>()
 //!     .unwrap();
 //! ```
@@ -125,14 +125,12 @@ impl<R> LCore<R> {
 
         // send message
         let mut dummy = [1u8, 0, 0, 0, 0, 0, 0, 0];
-        if write_r(self.send_efd, &dummy).is_err() {
-            panic!("cannot write on eventfd with slave");
-        }
+        write_r(self.send_efd, &dummy)
+            .expect("cannot write on eventfd with slave");
 
         // wait ack
-        if read_r(self.ack_efd, &mut dummy).is_err() {
-            panic!("cannot read on eventfd with slave");
-        }
+        read_r(self.ack_efd, &mut dummy)
+            .expect("cannot read on eventfd with slave");
 
         Ok(Wait {
             lcore: self
@@ -233,7 +231,7 @@ impl Builder {
     ///
     /// let builder = lcore::Builder::new()
     ///     .name("foo".into())
-    ///     .affinity(vec![0]);
+    ///     .affinity(&[0]);
     ///
     /// let lc = builder.spawn::<()>().unwrap();
     /// ```
@@ -292,7 +290,7 @@ impl Builder {
     /// use dpdk::core::lcore;
     ///
     /// let lc = lcore::Builder::new()
-    ///     .affinity(vec![0])
+    ///     .affinity(&[0])
     ///     .spawn::<i32>()
     ///     .unwrap();
     ///
@@ -305,8 +303,10 @@ impl Builder {
     ///
     /// assert_eq!(res, 0);
     /// ```
-    pub fn affinity(mut self, cpuvec: Vec<usize>) -> Builder {
-        let mut cpuset: libc::cpu_set_t = unsafe { mem::uninitialized() };
+    pub fn affinity(mut self, cpuvec: &[usize]) -> Builder {
+        let mut cpuset: libc::cpu_set_t = unsafe {
+            mem::MaybeUninit::zeroed().assume_init()
+        };
         unsafe {
             libc::CPU_ZERO(&mut cpuset);
 
@@ -329,8 +329,7 @@ impl Builder {
     /// # Errors
     ///
     /// Unlike the [`spawn`] free function, this method yeilds an
-    /// `io::Result` to capture any failure when creating the thread at
-    /// the OS level.
+    /// `io::Result` to capture any failure when creating the thread at the OS level.
     ///
     /// [`Builder`]: struct.Builder.html
     /// [`LCore`]: struct.LCore.html
@@ -387,16 +386,14 @@ impl Builder {
                 let packet = their_packet.clone();
 
                 // wait command
-                if read_r(send_efd, &mut dummy).is_err() {
-                    panic!("cannot read on eventfd with master");
-                }
+                read_r(send_efd, &mut dummy)
+                    .expect("cannot read on eventfd with master");
 
                 their_state.store(State::RUNNING as usize, Ordering::Relaxed);
 
                 // send ack
-                if write_r(ack_efd, &dummy).is_err() {
-                    panic!("cannot write on eventfd with master");
-                }
+                write_r(ack_efd, &dummy)
+                    .expect("cannot write on eventfd with master");
 
                 // call the function and store the return value
                 if let Some(f) = (*func.get()).take() {
